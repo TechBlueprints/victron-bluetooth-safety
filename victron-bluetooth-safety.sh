@@ -105,17 +105,17 @@ _apply_patches() {
         return 0
     fi
 
-    _log "Applying gattserver.py patch"
-    if ! patch -p1 -d / -N < "$INSTALL_DIR/gattserver.py.patch" 2>/dev/null; then
-        _log "ERROR: Failed to apply gattserver.py patch"
-        return 1
-    fi
+	_log "Applying gattserver.py patch"
+	if ! (cd / && patch -p1 -N < "$INSTALL_DIR/gattserver.py.patch") 2>/dev/null; then
+		_log "ERROR: Failed to apply gattserver.py patch"
+		return 1
+	fi
 
-    _log "Applying vesmart_server.py patch"
-    if ! patch -p1 -d / -N < "$INSTALL_DIR/vesmart_server.py.patch" 2>/dev/null; then
-        _log "ERROR: Failed to apply vesmart_server.py patch"
-        return 1
-    fi
+	_log "Applying vesmart_server.py patch"
+	if ! (cd / && patch -p1 -N < "$INSTALL_DIR/vesmart_server.py.patch") 2>/dev/null; then
+		_log "ERROR: Failed to apply vesmart_server.py patch"
+		return 1
+	fi
 
     _log "Patches applied successfully"
 }
@@ -126,13 +126,13 @@ _revert_patches() {
         return 0
     fi
 
-    _log "Reverting gattserver.py patch"
-    patch -p1 -d / -R < "$INSTALL_DIR/gattserver.py.patch" 2>/dev/null || \
-        _log "WARNING: Failed to revert gattserver.py patch"
+	_log "Reverting gattserver.py patch"
+	(cd / && patch -p1 -R < "$INSTALL_DIR/gattserver.py.patch") 2>/dev/null || \
+		_log "WARNING: Failed to revert gattserver.py patch"
 
-    _log "Reverting vesmart_server.py patch"
-    patch -p1 -d / -R < "$INSTALL_DIR/vesmart_server.py.patch" 2>/dev/null || \
-        _log "WARNING: Failed to revert vesmart_server.py patch"
+	_log "Reverting vesmart_server.py patch"
+	(cd / && patch -p1 -R < "$INSTALL_DIR/vesmart_server.py.patch") 2>/dev/null || \
+		_log "WARNING: Failed to revert vesmart_server.py patch"
 
     _log "Patches reverted"
 }
@@ -153,8 +153,8 @@ _add_rc_local() {
 # victron-bluetooth-safety
 if [ -f /data/victron-bluetooth-safety/gattserver.py.patch ]; then
     mount -o remount,rw / 2>/dev/null && \
-        patch -p1 -d / -N < /data/victron-bluetooth-safety/gattserver.py.patch >/dev/null 2>&1
-    patch -p1 -d / -N < /data/victron-bluetooth-safety/vesmart_server.py.patch >/dev/null 2>&1
+        (cd / && patch -p1 -N < /data/victron-bluetooth-safety/gattserver.py.patch) >/dev/null 2>&1
+    (cd / && patch -p1 -N < /data/victron-bluetooth-safety/vesmart_server.py.patch) >/dev/null 2>&1
     mount -o remount,ro / 2>/dev/null
     svc -t /service/vesmart-server 2>/dev/null
 fi
