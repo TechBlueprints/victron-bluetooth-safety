@@ -38,22 +38,8 @@ ensure_vesmart_safe() {
     [ -f "$_gs" ] || return 0
     grep -q '# vesmart-safety' "$_gs" && return 0
     grep -q '_keep_alive_timer_timeout' "$_gs" || return 0
-
-    # Acquire lock with stale-lock recovery.  Write our PID so a
-    # concurrent caller can tell whether the owner is still alive.
-    _lock=/tmp/.vesmart-safety.lock
-    if ! mkdir "$_lock" 2>/dev/null; then
-        _owner=$(cat "$_lock/pid" 2>/dev/null)
-        if [ -n "$_owner" ] && kill -0 "$_owner" 2>/dev/null; then
-            return 0
-        fi
-        rm -rf "$_lock"
-        mkdir "$_lock" 2>/dev/null || return 0
-    fi
-    echo $$ > "$_lock/pid"
-
     echo "[vesmart-safety] Patching vesmart disconnect behavior"
-    mount -o remount,rw / 2>/dev/null || { rm -rf "$_lock"; return 1; }
+    mount -o remount,rw / 2>/dev/null || return 1
     python3 -c "
 import re, os, tempfile
 p = '$_gs'
@@ -83,6 +69,5 @@ if c != orig:
     else
         echo "[vesmart-safety] WARNING: Python patcher failed (exit $_rc)"
     fi
-    rm -rf "$_lock"
     return $_rc
 }
