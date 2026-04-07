@@ -38,13 +38,27 @@ ensure_vesmart_safe() {
     [ -f "$_gs" ] || return 0
     grep -q '# vesmart-safety' "$_gs" && return 0
     grep -q '_keep_alive_timer_timeout' "$_gs" || return 0
-    mkdir /tmp/.vesmart-safety.lock 2>/dev/null || return 0
+
+    # Acquire lock with stale-lock recovery.  Write our PID so a
+    # concurrent caller can tell whether the owner is still alive.
+    _lock=/tmp/.vesmart-safety.lock
+    if ! mkdir "$_lock" 2>/dev/null; then
+        _owner=$(cat "$_lock/pid" 2>/dev/null)
+        if [ -n "$_owner" ] && kill -0 "$_owner" 2>/dev/null; then
+            return 0
+        fi
+        rm -rf "$_lock"
+        mkdir "$_lock" 2>/dev/null || return 0
+    fi
+    echo $$ > "$_lock/pid"
+
     echo "[vesmart-safety] Patching vesmart disconnect behavior"
-    mount -o remount,rw / 2>/dev/null || { rmdir /tmp/.vesmart-safety.lock; return 1; }
+    mount -o remount,rw / 2>/dev/null || { rm -rf "$_lock"; return 1; }
     python3 -c "
-import re
+import re, os, tempfile
 p = '$_gs'
-with open(p) as f: c = f.read()
+with open(p) as f: orig = f.read()
+c = orig
 c = re.sub(
     r'(\tdef _keep_alive_timer_timeout\(self\):\n).*?(\n\t\treturn False)',
     r'\1\t\tlogger.info(\"Keep alive timeout (disconnects disabled)\")'
@@ -55,7 +69,11 @@ c = re.sub(
     r'(\t\tself\._keepAliveTimer = GObject\.timeout_add\(60000,\s*self\._keep_alive_timer_timeout\))',
     '\t\tpass  # vesmart-safety: 60s timer disabled (venus#1587)',
     c, count=1)
-with open(p, 'w') as f: f.write(c)
+if c != orig:
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p))
+    with os.fdopen(fd, 'w') as f: f.write(c)
+    os.chmod(tmp, os.stat(p).st_mode)
+    os.rename(tmp, p)
 "
     _rc=$?
     mount -o remount,ro / 2>/dev/null
@@ -65,6 +83,6 @@ with open(p, 'w') as f: f.write(c)
     else
         echo "[vesmart-safety] WARNING: Python patcher failed (exit $_rc)"
     fi
-    rmdir /tmp/.vesmart-safety.lock 2>/dev/null
+    rm -rf "$_lock"
     return $_rc
 }
