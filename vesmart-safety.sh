@@ -38,6 +38,16 @@ ensure_vesmart_safe() {
     [ -f "$_gs" ] || return 0
     grep -q '# vesmart-safety' "$_gs" && return 0
     grep -q 'timeout_add(60000' "$_gs" || return 0
+    # The bug is the combination of the 60s timer AND iterating all
+    # devices via get_devices in the timeout handler.  If Victron fixes
+    # the handler to scope disconnects (removing get_devices from it),
+    # we should not overwrite their fix.
+    python3 -c "
+import re, sys
+with open('$_gs') as f: c = f.read()
+m = re.search(r'def _keep_alive_timer_timeout.*?(?=\n\tdef |\Z)', c, re.DOTALL)
+sys.exit(0 if m and 'get_devices' in m.group() else 1)
+" || return 0
     echo "[vesmart-safety] Patching vesmart disconnect behavior"
     mount -o remount,rw / 2>/dev/null || return 1
     python3 -c "
