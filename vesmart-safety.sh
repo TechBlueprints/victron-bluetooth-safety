@@ -37,7 +37,7 @@ ensure_vesmart_safe() {
     _gs=/opt/victronenergy/vesmart-server/gattserver.py
     [ -f "$_gs" ] || return 0
     grep -q '# vesmart-safety' "$_gs" && return 0
-    grep -q '_keep_alive_timer_timeout' "$_gs" || return 0
+    grep -q 'timeout_add(60000' "$_gs" || return 0
     echo "[vesmart-safety] Patching vesmart disconnect behavior"
     mount -o remount,rw / 2>/dev/null || return 1
     python3 -c "
