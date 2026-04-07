@@ -1,98 +1,98 @@
 # victron-bluetooth-safety
 
-Patch Victron's `vesmart-server` on Venus OS so it only disconnects its
-own GATT clients (VictronConnect), instead of disconnecting **all** BLE
-devices on **all** adapters every 60 seconds.
-
-This is the surgical alternative to
-[disable-victron-bluetooth](https://github.com/TechBlueprints/disable-victron-bluetooth),
-which disables `vesmart-server` entirely. This patch keeps VictronConnect
-BLE access and VE.Smart Networking working while preventing collateral
-damage to third-party BLE connections.
-
-## The problem
-
-When any BLE device connects to the Cerbo (even on a different adapter),
-`vesmart-server` starts a 60-second keep-alive timer. When that timer
-fires (because the connected device isn't a VictronConnect client and
-never sends a keep-alive), it disconnects **every** connected BLE device
-it can find — batteries, sensors, everything.
+Prevent Victron's `vesmart-server` on Venus OS from disconnecting
+**all** BLE devices on **all** adapters every 60 seconds.
 
 Upstream issue:
 [victronenergy/venus#1587](https://github.com/victronenergy/venus/issues/1587)
 
-## What the patch does
+## The problem
 
-The fix is based on the fact that vesmart-server's GATT service already
-knows which devices are VictronConnect clients — they're the only ones
-that read/write its `306b*` characteristics. Other BLE devices (batteries,
-sensors) use their own GATT services; the Cerbo connects outbound to them.
+When any BLE device connects to the Cerbo (even on a different adapter),
+`vesmart-server` starts a hardcoded 60-second keep-alive timer. When
+that timer fires (because the connected device isn't a VictronConnect
+client and never sends a keep-alive), it disconnects **every** connected
+BLE device it can find — batteries, sensors, everything.
 
-The patch makes four changes:
+This makes it impossible to maintain stable BLE connections for
+third-party services (battery monitors, temperature sensors, relay
+switches, etc.) while `vesmart-server` is running.
 
-1. **Tracks GATT clients** — records the device path from the BlueZ
-   `options["device"]` dict when `ControlChr.read_value()` is called
-   (the VictronConnect handshake)
-2. **Defers the keep-alive timer** — only starts the 60s timer when a
-   real GATT interaction occurs, not on generic BlueZ connection events
-3. **Scopes disconnects** — the timeout handler only disconnects tracked
-   GATT clients, not all BlueZ devices
-4. **Cleans up on disconnect** — removes devices from the tracked set
-   when they disconnect naturally
+## Two approaches
 
-## Install
+This repo provides two approaches. Choose whichever fits your setup.
 
-Copy the project to the Cerbo and run the installer:
+### 1. Inline snippet (recommended)
+
+**[`vesmart-safety.sh`](vesmart-safety.sh)** is a small, self-contained
+shell function that any BLE service can source or copy into its startup
+script. It uses a Python patcher to find and neutralize the disconnect
+behavior **by method name**, making it version-agnostic across Venus OS
+releases.
+
+**How to use it:**
+
+Source the file and call the function from your service's `run` or start
+script:
+
+```sh
+. /data/vesmart-safety/vesmart-safety.sh
+ensure_vesmart_safe
+```
+
+Or copy the `ensure_vesmart_safe` function body directly into your
+script. The Apache 2.0 license header in the file permits this.
+
+**How it works:**
+
+- Detects whether `gattserver.py` needs patching (idempotent)
+- Uses a Python regex patcher to replace the `_keep_alive_timer_timeout`
+  method body with a no-op, regardless of what that body contains
+- Disables the hardcoded 60-second timer in `connected()`
+- Preserves VictronConnect's dynamic keepalive (separate code path)
+- Uses a lock directory to prevent races when multiple services start
+  simultaneously
+- After a firmware update reverts the change, the first service to
+  start re-applies it automatically — no `rc.local` hook needed
+
+**Deploy to Cerbo:**
+
+```bash
+ssh root@cerbo 'mkdir -p /data/vesmart-safety'
+scp vesmart-safety.sh root@cerbo:/data/vesmart-safety/
+```
+
+Then add the two-line source + call to any service startup script.
+
+### 2. Full patch (standalone installer)
+
+**[`victron-bluetooth-safety.sh`](victron-bluetooth-safety.sh)** is a
+standalone installer that applies unified diff patches to
+`gattserver.py` and `vesmart_server.py`. It provides more surgical
+behavior: tracking which devices are actual VictronConnect GATT clients
+and only disconnecting those.
+
+**Note:** The patch files in `patches/` are version-specific and may
+need regeneration when Victron updates `vesmart-server`. The inline
+snippet above is preferred for most use cases because it is
+version-agnostic.
 
 ```bash
 scp -r patches victron-bluetooth-safety.sh root@cerbo:/data/victron-bluetooth-safety/
 ssh root@cerbo 'sh /data/victron-bluetooth-safety/victron-bluetooth-safety.sh install'
 ```
 
-Or install directly:
+## Compatibility
 
-```bash
-ssh root@cerbo 'mkdir -p /data/victron-bluetooth-safety'
-scp patches/*.patch root@cerbo:/data/victron-bluetooth-safety/
-scp victron-bluetooth-safety.sh root@cerbo:/data/victron-bluetooth-safety/
-ssh root@cerbo 'sh /data/victron-bluetooth-safety/victron-bluetooth-safety.sh install'
-```
-
-The installer:
-
-1. Remounts the root filesystem read-write
-2. Applies the patches to `/opt/victronenergy/vesmart-server/`
-3. Restores root to read-only
-4. Adds a hook to `/data/rc.local` to reapply the patch on boot
-   (including after firmware updates)
-5. Restarts `vesmart-server` to pick up the changes
-
-## Uninstall
-
-```bash
-ssh root@cerbo 'sh /data/victron-bluetooth-safety/victron-bluetooth-safety.sh uninstall'
-```
-
-## Status
-
-```bash
-ssh root@cerbo 'sh /data/victron-bluetooth-safety/victron-bluetooth-safety.sh status'
-```
-
-## How it survives firmware updates
-
-Venus OS firmware updates replace the entire root filesystem, which
-reverts the patched files. The installer adds a hook to `/data/rc.local`
-(which lives on the persistent `/data` partition) that reapplies the
-patches on every boot.
-
-See [Venus OS: Root Access](https://www.victronenergy.com/live/ccgx:root_access)
-for details on the Venus OS customization model.
+| Venus OS | Inline snippet | Full patch |
+|----------|---------------|------------|
+| v3.67    | Yes           | Needs regeneration |
+| v3.72    | Yes           | Yes (with updated patch) |
+| Future   | Expected yes  | May need regeneration |
 
 ## Development
 
-A non-production Cerbo GX (`einstein`) is available for testing at
-`root@dev-cerbo`.
+A non-production Cerbo GX is available for testing at `root@dev-cerbo`.
 
 ## License
 
